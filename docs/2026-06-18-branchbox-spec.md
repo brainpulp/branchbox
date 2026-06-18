@@ -30,16 +30,16 @@ Branchbox is a web app for organizing and exploring an image collection through 
 
 ## Section 2 — Data Model
 
-Mirrors PIM's `nodes` / `edges` shape so the forked canvas engine works with minimal change.
+Mirrors PIM's in-memory `nodes` / `edges` arrays so the forked canvas engine works with minimal change. Persistence stores these arrays as JSONB inside one board row (see Section 6) — so `imageNode`/`edge` objects live *inside* a board's `nodes`/`edges` arrays and carry no `board_id`/`created_at` of their own.
 
-- **`board`** — `{ id, name, created_at }`
-- **`imageNode`** — `{ id, board_id, imageRef, thumbnailRef, width, height, embedding[], tags[], x, y, created_at }`
-  - `imageRef` / `thumbnailRef`: pointers to image bytes in Supabase Storage (see Section 6)
+- **`board`** (the persisted row) — `{ id, user_id, name, nodes[], edges[], created_at, updated_at }`
+- **`imageNode`** (element of `board.nodes`) — `{ id, imageRef, thumbRef, w, h, embedding[], tags[], x, y }`
+  - `imageRef` / `thumbRef`: object paths into the Supabase Storage bucket (see Section 6)
   - `embedding[]`: the CLIP vector (the single v1 similarity "lens")
   - `tags[]`: optional user tags that nudge similarity
   - `x, y`: last force-sim position, so layout persists across loads
-- **`edge`** — `{ id, board_id, source_id, target_id, kind, created_at }`
-  - v1 always writes `kind: 'branch'` (provenance — "I branched B from A")
+- **`edge`** (element of `board.edges`) — `{ id, source, target, kind }`
+  - `source` / `target` are `imageNode.id`s; v1 always writes `kind: 'branch'` (provenance — "I branched B from A")
 
 **Forward-compatible seams (designed, not built in v1):**
 1. **`edge.kind` discriminator** — future AI-discovered relationships become edges with `kind: 'palette' | 'material' | 'origin' | 'semantic' | …`, coexisting on the same graph with toggleable visibility.
@@ -87,17 +87,31 @@ Mirrors PIM's `nodes` / `edges` shape so the forked canvas engine works with min
 
 ## Section 6 — Storage Schema (Supabase)
 
-Three tables (namespaced `bb_`) in **PIM's existing Supabase project**, plus a storage bucket.
+**Revised (2026-06-18) to match PIM's proven pattern: one JSONB-blob row per board, not separate relational tables.** PIM persists each board as a single `public.pim_projects` row with `nodes` / `edges` / `views` as JSONB columns; Branchbox mirrors this for consistency, simplicity, and because the client-side brute-force similarity loads the entire board anyway (one-row load is ideal).
 
-- **`bb_boards`** — `id, name, created_at` (+ user scoping per PIM's RLS)
-- **`bb_image_nodes`** — `id, board_id, image_path, thumb_path, width, height, embedding, tags, x, y, created_at`
-- **`bb_edges`** — `id, board_id, source_id, target_id, kind, created_at`
+**One table — `public.bb_boards`** in **PIM's existing Supabase project** (`ikztpvxfgmhmrcwolwgx`, `public` schema, no `.schema()` call — same as PIM's `db.js`):
 
-**Decisions:**
-- **Embedding = plain `float8[]` column, not pgvector.** Similarity runs client-side (load the board's vectors, brute-force cosine in JS). pgvector only earns its keep for server-side ANN, which is out of scope. A few hundred × 512 floats load in one query.
-- **Image bytes → Supabase Storage bucket (`branchbox-images`), never base64-in-a-column.** `bb_image_nodes` stores only paths (`image_path`, `thumb_path`). Thumbnails load for canvas rendering; full (downscaled) images load lazily.
-- **JS-model ↔ DB-column mapping:** the in-memory model (Section 2) is camelCase; the DB is snake_case. Mapping: `imageRef → image_path`, `thumbnailRef → thumb_path`, `embedding[] → embedding (float8[])`, the rest 1:1.
-- **RLS:** the three `bb_` tables are new, so they need **their own RLS policies written** — scoped against PIM's existing auth/user so a logged-in PIM user sees only their own boards. "Reuse PIM's scoping" means same auth + same user-id pattern, not inherited policies; treat writing these policies as an explicit implementation task.
+| column | type | notes |
+|--------|------|-------|
+| `id` | uuid pk (default `gen_random_uuid()`) | board id |
+| `user_id` | uuid | FK to `auth.users`, for RLS — same pattern as `pim_projects` |
+| `name` | text | board name |
+| `nodes` | jsonb | array of image-node objects (see below) |
+| `edges` | jsonb | array of edge objects `{ id, source, target, kind }` |
+| `created_at` | timestamptz default `now()` | |
+| `updated_at` | timestamptz | bumped on every save |
+
+**`nodes` JSONB element shape** (matches the in-memory model, Section 2):
+```js
+{ id, imageRef, thumbRef, w, h, embedding: number[], tags: string[], x, y }
+```
+- `imageRef` / `thumbRef`: object paths into the storage bucket (e.g. `"<boardId>/<nodeId>.jpg"` and `"<boardId>/<nodeId>.thumb.jpg"`). Resolve to public URLs at load time, same as PIM's `getPublicUrl`.
+- `embedding`: the CLIP vector as a plain JSON number array. A few hundred nodes × 512 floats ≈ a sub-MB JSONB row — fine for v1's "tens to low hundreds" scale. (If a board ever outgrows this, splitting embeddings into a side table is the spin-off-era migration — out of scope now.)
+
+**Other decisions:**
+- **No pgvector.** Similarity runs client-side over the loaded vectors. pgvector only earns its keep for server-side ANN, which is out of scope.
+- **Image bytes → Supabase Storage bucket (`branchbox-images`), never base64 inline.** The JSONB stores only paths. Thumbnails load for canvas rendering; full (downscaled) images load lazily. (Mirrors PIM's `pim-models` bucket + `imageRef`/`thumbRef` URL pattern.)
+- **RLS:** `bb_boards` is a new table, so it needs **its own RLS policies written** — `user_id = auth.uid()` for select/insert/update/delete, identical in spirit to `pim_projects`. "Reuse PIM's scoping" = same auth session + same user-id predicate, not inherited policies; writing these policies is an explicit implementation task.
 
 ---
 
@@ -112,7 +126,7 @@ Three tables (namespaced `bb_`) in **PIM's existing Supabase project**, plus a s
 - Expand neighbors: "+N" pill → fan-out ghosts, inline accept/reject, top 5 + "show more"
 - Weighted-blend similarity (client-side cosine + tag nudge)
 - Tags: add / edit on nodes
-- Persistence via PIM's Supabase project (3 `bb_` tables + `branchbox-images` bucket), reusing PIM's auth
+- Persistence via PIM's Supabase project (single `bb_boards` JSONB-blob table + `branchbox-images` bucket), reusing PIM's auth
 - GitHub Pages deploy (own site)
 
 **Out of scope (v1):**
@@ -147,9 +161,14 @@ Three tables (namespaced `bb_`) in **PIM's existing Supabase project**, plus a s
 
 ## Implementation dependencies / open items for the plan
 
-- Obtain PIM's Supabase URL + anon key; review PIM's auth + RLS setup so Branchbox reuses the same user scoping.
-- Confirm PIM's existing table names to ensure `bb_` prefix avoids all collisions.
-- Identify the exact PIM canvas files to fork (`Graph.jsx`, `AnimatedG`, `NodeShape`, Zustand store) as the starting template.
+Resolved during plan-time exploration of PIM (`F:\code\pim`):
+- **Supabase project:** PIM's dedicated project is `ikztpvxfgmhmrcwolwgx` (`public` schema). Branchbox reuses the **same** `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`, points `db.js` at `supabase.from('bb_boards')` (no `.schema()` call — matches PIM), and creates a `branchbox-images` storage bucket.
+- **Auth:** email+password via `supabase.auth.signInWithPassword` / `signUp` (PIM's `Auth.jsx` pattern). Same user account (maxi.goldschwartz@gmail.com).
+- **RLS:** write `user_id = auth.uid()` policies for `bb_boards` (no inherited policies; PIM's `pim_projects` is the template).
+- **Canvas:** **extract the patterns** from PIM's `Graph.jsx` (3355-line monolith) — the D3-sim↔React integration (`simRef` / `simNodesRef` / rAF-throttled `setTick`), `NodeShape`, `AnimatedG`, `alphaDecay 0.015`, anchor-on-drag — into a **lean image-node canvas**. Do **not** copy the monolith wholesale (it carries 3D nodes, slideshows, frames, drill, presentation, views that Branchbox doesn't need). This is the "fork as template, then diverge" intent.
+
+Still to confirm at implementation time:
+- Run the `bb_boards` table + RLS + bucket creation against project `ikztpvxfgmhmrcwolwgx` (via Supabase MCP or dashboard) before wiring `db.js`.
 
 ## Next step
 

@@ -10,14 +10,19 @@ git add -A && git commit -m "wip: session end" && git push
 git pull
 ```
 
-## Status: spec finalized — next step is the implementation plan
+## Status: spec + implementation plan finalized — next step is to execute the plan
 
-There is no code yet. Brainstorming is **complete**: all 8 design sections were approved and the finalized spec is committed at [`docs/2026-06-18-branchbox-spec.md`](docs/2026-06-18-branchbox-spec.md). (The older `docs/2026-06-18-branchbox-design.md` is the superseded in-progress notes.)
+There is no code yet. Brainstorming and planning are **complete** (both reviewed + approved):
+- Spec: [`docs/2026-06-18-branchbox-spec.md`](docs/2026-06-18-branchbox-spec.md)
+- Implementation plan: [`docs/2026-06-18-branchbox-implementation-plan.md`](docs/2026-06-18-branchbox-implementation-plan.md)
+- (Superseded brainstorm notes: `docs/2026-06-18-branchbox-design.md`.)
+
+The plan is task-by-task (milestones M0–M7) with TDD steps. Backend reuses **PIM's Supabase project `ikztpvxfgmhmrcwolwgx`** via a single `bb_boards` JSONB-blob table + `branchbox-images` bucket; canvas is a *lean* fork (patterns extracted from PIM's `Graph.jsx`, not copied).
 
 **To pick this up in a new session, tell Claude:**
-> "Read CLAUDE.md and the spec in F:\code\branchbox, then use the writing-plans skill to produce the implementation plan."
+> "Read CLAUDE.md and the implementation plan in F:\code\branchbox, then start executing it (superpowers:subagent-driven-development or executing-plans), beginning at M0."
 
-Next step: invoke the `superpowers:writing-plans` skill against the spec to produce a detailed implementation plan. Only after the plan is approved should any code/scaffolding happen. Before coding, resolve the spec's "Implementation dependencies / open items" (PIM Supabase URL + anon key, PIM auth/RLS pattern, PIM table names for `bb_`-prefix collision check, exact PIM canvas files to fork).
+First implementation step: M0 (scaffold Vite+React+Vitest). M1 needs the `bb_boards` table/RLS/bucket created in Supabase project `ikztpvxfgmhmrcwolwgx` first.
 
 ## What this app is (target, once built)
 
