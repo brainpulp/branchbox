@@ -1,5 +1,12 @@
 # Branchbox — Design (in progress)
 
+> **SUPERSEDED (2026-06-18):** Brainstorming is complete. The finalized spec lives in
+> [`docs/2026-06-18-branchbox-spec.md`](2026-06-18-branchbox-spec.md). This file is kept
+> only as a record of the in-progress notes. Note two decisions were revised during the
+> final session: backend now reuses **PIM's Supabase project + auth** (not a dedicated
+> project) with `bb_`-prefixed tables, treating Branchbox as a backend sub-app of PIM to be
+> spun off later.
+
 **Status:** Brainstorming in progress. Section 1 of the design was presented and NOT yet confirmed by the user (conversation got interrupted by an unrelated PIM bug). Resume by re-presenting Section 1, get explicit approval, then continue through the remaining sections below.
 
 ## Problem statement

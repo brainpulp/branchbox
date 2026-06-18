@@ -10,18 +10,14 @@ git add -A && git commit -m "wip: session end" && git push
 git pull
 ```
 
-## Status: pre-implementation — brainstorming in progress
+## Status: spec finalized — next step is the implementation plan
 
-There is no code yet. This repo currently holds only the design-in-progress doc.
+There is no code yet. Brainstorming is **complete**: all 8 design sections were approved and the finalized spec is committed at [`docs/2026-06-18-branchbox-spec.md`](docs/2026-06-18-branchbox-spec.md). (The older `docs/2026-06-18-branchbox-design.md` is the superseded in-progress notes.)
 
 **To pick this up in a new session, tell Claude:**
-> "Read CLAUDE.md in F:\code\branchbox and pick up the Branchbox brainstorm where we left off."
+> "Read CLAUDE.md and the spec in F:\code\branchbox, then use the writing-plans skill to produce the implementation plan."
 
-Claude should then:
-1. Read `docs/2026-06-18-branchbox-design.md` for full context (problem statement, all decisions made so far, and which design sections are still pending).
-2. Re-present Section 1 (Overview & Architecture) and get explicit approval — it was presented once but the conversation got derailed by an unrelated PIM bug before the user confirmed it.
-3. Continue through the remaining design sections one at a time (data model, similarity engine details, import flow, branch/expand UX, storage schema, MVP scope, testing approach), per the `superpowers:brainstorming` skill process.
-4. Once all sections are approved, finalize the spec, run the spec-review loop, then hand off to `writing-plans` to produce an implementation plan. Only then should any code/scaffolding happen.
+Next step: invoke the `superpowers:writing-plans` skill against the spec to produce a detailed implementation plan. Only after the plan is approved should any code/scaffolding happen. Before coding, resolve the spec's "Implementation dependencies / open items" (PIM Supabase URL + anon key, PIM auth/RLS pattern, PIM table names for `bb_`-prefix collision check, exact PIM canvas files to fork).
 
 ## What this app is (target, once built)
 
@@ -32,7 +28,7 @@ A node-based, force-directed graph tool for organizing and exploring an image co
 - **Vite + React** (no TypeScript) — same as PIM
 - **D3.js** force simulation — forked from PIM's canvas (`Graph.jsx` pattern: `AnimatedG`, `NodeShape`, Zustand store)
 - **transformers.js** — in-browser CLIP-style embeddings (WebGPU/WASM), no backend compute
-- **Supabase** — own dedicated project (not shared with PIM/gastos), for persistent multi-board storage
+- **Supabase** — for now reuses **PIM's existing project + auth** (Branchbox treated as a backend sub-app of PIM), with `bb_`-prefixed tables + a `branchbox-images` bucket; spun off onto a dedicated project later. (Revised from the original "dedicated project" plan during the final brainstorm session.)
 - **GitHub Pages** — same deploy pattern as PIM (`npm run deploy` → `gh-pages -d dist`)
 
 ## Key decisions already locked in (see design doc for full reasoning)
