@@ -8,11 +8,21 @@ import ImageNode from '../components/ImageNode'
 import ImportDropzone from '../components/ImportDropzone'
 import { hashBytes, downscaleImage, makeThumbnail } from '../lib/imageUtils'
 import { uploadImage, publicUrl, loadBoard, saveBoard } from '../lib/db'
-import { embedImage, onEmbedderState } from '../lib/embedder'
+import { embedImage, classifyImage, onEmbedderState } from '../lib/embedder'
 import { createEmbedQueue } from '../lib/embedQueue'
-import { topNeighbors } from '../lib/similarity'
+import { searchPhotos, rankBySimilarity, deriveQuery } from '../lib/discover'
 
-const FAN_PAGE = 5 // neighbors revealed per "show more"
+const FAN_PAGE = 5 // suggestions revealed per "show more"
+
+// Pluggable discovery source: whichever stock-photo key is configured.
+// (Swapping to web/reverse-image search later = a new adapter in discover.js.)
+const STOCK = import.meta.env.VITE_PEXELS_KEY
+  ? { provider: 'pexels', key: import.meta.env.VITE_PEXELS_KEY }
+  : import.meta.env.VITE_UNSPLASH_KEY
+    ? { provider: 'unsplash', key: import.meta.env.VITE_UNSPLASH_KEY }
+    : null
+
+const resolveRef = (ref) => ref && (/^https?:|^blob:|^data:/.test(ref) ? ref : publicUrl(ref))
 
 // Lean fork of PIM's Graph.jsx D3↔React integration: sim in simRef, live
 // positions in mutable simNodesRef, React re-renders via rAF-throttled setTick.
@@ -29,9 +39,11 @@ export default function Board({ boardId }) {
   const [toast, setToast] = useState(null)
   const [embedderStatus, setEmbedderStatus] = useState('idle') // idle|loading|ready|error
   const [fanLimit, setFanLimit] = useState(FAN_PAGE)
+  const [discovering, setDiscovering] = useState(false)
   const toastTimerRef = useRef(null)
   const queueRef = useRef(null)
-  const dismissedRef = useRef(new Set()) // ids rejected during the open fan
+  const dismissedRef = useRef(new Set()) // ids removed (rejected/accepted) during the open fan
+  const rankedRef = useRef([])           // full ranked candidate list for the open discovery fan
   const boardIdRef = useRef(boardId); boardIdRef.current = boardId
   const loadedRef = useRef(false)        // gate autosave until the board has loaded
   const saveTimerRef = useRef(null)
@@ -50,25 +62,6 @@ export default function Board({ boardId }) {
   const loadBoardData = useBoardStore(s => s.loadBoardData)
   const [tagInput, setTagInput] = useState('')
 
-  // ids already linked to `id` (either direction) — never suggested again.
-  const connectedIds = useCallback((id) => {
-    const s = new Set()
-    useBoardStore.getState().edges.forEach(e => {
-      if (e.source === id) s.add(e.target)
-      if (e.target === id) s.add(e.source)
-    })
-    return s
-  }, [])
-
-  // top similar board nodes for `srcId`, minus already-linked and rejected ones.
-  const neighborsFor = useCallback((srcId, limit) => {
-    const nodes = useBoardStore.getState().nodes
-    const src = nodes.find(n => n.id === srcId)
-    if (!src || src.status !== 'ready' || !Array.isArray(src.embedding)) return []
-    const excludeIds = new Set([...connectedIds(srcId), ...dismissedRef.current])
-    return topNeighbors(src, nodes, { limit, excludeIds })
-  }, [connectedIds])
-
   const showToast = useCallback((msg) => {
     setToast(msg)
     clearTimeout(toastTimerRef.current)
@@ -85,33 +78,42 @@ export default function Board({ boardId }) {
     })
   }
 
-  // Import pipeline: hash-dedup → downscale + thumb → computing node → upload →
-  // refs → enqueue for embedding (flips computing → ready).
+  // Import core (shared by drag-drop files and accepted discovery photos):
+  // hash-dedup → downscale + thumb → computing node → upload → refs → enqueue
+  // for embedding (flips computing → ready). Returns the new node id, or null.
+  const importBlob = useCallback(async (blob) => {
+    const hash = await hashBytes(await blob.arrayBuffer())
+    if (useBoardStore.getState().nodes.some(n => n.hash === hash)) {
+      showToast('Skipped a duplicate image'); return null
+    }
+    const { blob: fullBlob, w, h } = await downscaleImage(blob)
+    const thumbBlob = await makeThumbnail(blob)
+    const nodeId = addImageNode({ imageRef: null, thumbRef: null, w, h, hash, status: 'computing' })
+    try {
+      const fullPath = await uploadImage(fullBlob, boardId, nodeId, 'full')
+      const thumbPath = await uploadImage(thumbBlob, boardId, nodeId, 'thumb')
+      setNodeRefs(nodeId, fullPath, thumbPath)
+      queueRef.current.enqueue(nodeId, URL.createObjectURL(fullBlob))
+    } catch {
+      useBoardStore.getState().setNodeStatus(nodeId, 'error')
+      showToast('Upload failed — check the storage bucket')
+    }
+    return nodeId
+  }, [boardId, addImageNode, setNodeRefs, showToast])
+
   const importFiles = useCallback(async (fileList) => {
     const files = Array.from(fileList).filter(f => f.type.startsWith('image/'))
     for (const file of files) {
-      try {
-        const hash = await hashBytes(await file.arrayBuffer())
-        if (useBoardStore.getState().nodes.some(n => n.hash === hash)) {
-          showToast('Skipped a duplicate image'); continue
-        }
-        const { blob: fullBlob, w, h } = await downscaleImage(file)
-        const thumbBlob = await makeThumbnail(file)
-        const nodeId = addImageNode({ imageRef: null, thumbRef: null, w, h, hash, status: 'computing' })
-        try {
-          const fullPath = await uploadImage(fullBlob, boardId, nodeId, 'full')
-          const thumbPath = await uploadImage(thumbBlob, boardId, nodeId, 'thumb')
-          setNodeRefs(nodeId, fullPath, thumbPath)
-          queueRef.current.enqueue(nodeId, URL.createObjectURL(fullBlob))
-        } catch {
-          useBoardStore.getState().setNodeStatus(nodeId, 'error')
-          showToast('Upload failed — check the storage bucket')
-        }
-      } catch {
-        showToast('Could not read an image')
-      }
+      try { await importBlob(file) } catch { showToast('Could not read an image') }
     }
-  }, [boardId, addImageNode, setNodeRefs, showToast])
+  }, [importBlob, showToast])
+
+  // Download a discovered stock photo into the board as a real node.
+  const importFromUrl = useCallback(async (url) => {
+    const res = await fetch(url)
+    if (!res.ok) throw new Error(`download failed: ${res.status}`)
+    return importBlob(await res.blob())
+  }, [importBlob])
 
   // Reflect the shared CLIP-model load state in a status chip.
   useEffect(() => onEmbedderState(setEmbedderStatus), [])
@@ -255,21 +257,57 @@ export default function Board({ boardId }) {
     document.addEventListener('mouseup', onUp)
   }, [clientToSim, setNodePos])
 
-  const toGhost = (n) => ({ id: n.id, thumbRef: n.thumbRef, score: n.score })
+  const toGhost = (c) => ({ id: c.id, thumbRef: c.thumbUrl, url: c.url, score: c.score })
 
-  // Pill click → open a fresh fan of the top similar nodes around the source.
-  const handleExpand = useCallback((srcId) => {
-    dismissedRef.current = new Set()
-    setFanLimit(FAN_PAGE)
+  // Recompute the visible fan from the ranked candidate list, honouring
+  // dismissals (rejected/accepted) and the current reveal limit.
+  const renderFan = useCallback((srcId, limit) => {
+    const list = rankedRef.current.filter(c => !dismissedRef.current.has(c.id)).slice(0, limit)
+    setGhosts(srcId, list.map(toGhost))
+  }, [setGhosts])
+
+  // Pill click → DISCOVER: auto-derive a query from the image, search the stock
+  // source, rank candidates by CLIP similarity, fan out the best as ghosts.
+  const handleExpand = useCallback(async (srcId) => {
+    if (!STOCK) { showToast('Add a Pexels or Unsplash API key to discover'); return }
+    const src = useBoardStore.getState().nodes.find(n => n.id === srcId)
+    if (!src || !Array.isArray(src.embedding)) { showToast('Image is still computing…'); return }
     setSelectedId(srcId)
-    setGhosts(srcId, neighborsFor(srcId, FAN_PAGE).map(toGhost))
-  }, [neighborsFor, setGhosts])
+    setDiscovering(true)
+    dismissedRef.current = new Set()
+    rankedRef.current = []
+    setFanLimit(FAN_PAGE)
+    try {
+      const imageUrl = resolveRef(src.thumbRef || src.imageRef)
+      const query = await deriveQuery(src, { classify: classifyImage, imageUrl })
+      const candidates = await searchPhotos({ ...STOCK, query, perPage: 15 })
+      const ranked = await rankBySimilarity(src.embedding, candidates, {
+        embed: (u) => embedImage(u), limit: 12,
+      })
+      if (!ranked.length) { showToast(`No matches for “${query}”`); return }
+      rankedRef.current = ranked
+      renderFan(srcId, FAN_PAGE)
+      showToast(`Found ${ranked.length} for “${query}”`)
+    } catch {
+      showToast('Discovery failed — check the API key or network')
+    } finally {
+      setDiscovering(false)
+    }
+  }, [showToast, renderFan])
 
-  // ✓ accept → draw the provenance edge, drop the ghost from the fan.
-  const acceptGhost = useCallback((srcId, ghostId) => {
-    addBranchEdge(srcId, ghostId)
+  // ✓ accept → download the photo into the board + draw the provenance edge.
+  const acceptGhost = useCallback(async (srcId, ghostId) => {
+    const ghost = useBoardStore.getState().ghosts.find(g => g.id === ghostId)
+    dismissedRef.current.add(ghostId)
     setGhosts(srcId, useBoardStore.getState().ghosts.filter(g => g.id !== ghostId))
-  }, [addBranchEdge, setGhosts])
+    if (!ghost?.url) return
+    try {
+      const newId = await importFromUrl(ghost.url)
+      if (newId) addBranchEdge(srcId, newId)
+    } catch {
+      showToast('Could not add that image')
+    }
+  }, [addBranchEdge, setGhosts, importFromUrl, showToast])
 
   // ✕ reject → remember the dismissal so "show more" won't resurface it.
   const rejectGhost = useCallback((srcId, ghostId) => {
@@ -280,11 +318,12 @@ export default function Board({ boardId }) {
   const showMore = useCallback((srcId) => {
     const next = fanLimit + FAN_PAGE
     setFanLimit(next)
-    setGhosts(srcId, neighborsFor(srcId, next).map(toGhost))
-  }, [fanLimit, neighborsFor, setGhosts])
+    renderFan(srcId, next)
+  }, [fanLimit, renderFan])
 
   const clearFan = useCallback(() => {
     dismissedRef.current = new Set()
+    rankedRef.current = []
     setFanLimit(FAN_PAGE)
     clearGhosts()
   }, [clearGhosts])
@@ -303,9 +342,10 @@ export default function Board({ boardId }) {
   const T = zoomTransformRef.current
   const nodeById = Object.fromEntries(storeNodes.map(n => [n.id, n]))
   const ghostIdSet = new Set(ghosts.map(g => g.id))
-  const pillCount = (selectedId && !expandedFrom) ? neighborsFor(selectedId, FAN_PAGE).length : 0
   const fanSrc = expandedFrom ? simNodesRef.current.find(n => n.id === expandedFrom) : null
   const selectedNode = selectedId ? nodeById[selectedId] : null
+  const canDiscover = !!STOCK && !expandedFrom && !!selectedNode && Array.isArray(selectedNode.embedding)
+  const moreAvailable = rankedRef.current.filter(c => !dismissedRef.current.has(c.id)).length > ghosts.length
 
   const commitTag = () => {
     const t = tagInput.trim().replace(/,+$/, '').trim()
@@ -339,7 +379,7 @@ export default function Board({ boardId }) {
             const isGhosted = expandedFrom && ghostIdSet.has(sn.id)
             return <ImageNode key={sn.id} node={data} x={sn.x} y={sn.y}
               isSelected={selectedId === sn.id} dimmed={isGhosted}
-              pillCount={selectedId === sn.id ? pillCount : 0}
+              canDiscover={selectedId === sn.id && canDiscover}
               onMouseDown={handleNodeMouseDown} onExpand={handleExpand} />
           })}
           {fanSrc && fanSrc.x != null && ghosts.map((g, i) => {
@@ -353,7 +393,7 @@ export default function Board({ boardId }) {
                 onReject={() => rejectGhost(expandedFrom, g.id)} />
             )
           })}
-          {fanSrc && fanSrc.x != null && ghosts.length > 0 && (
+          {fanSrc && fanSrc.x != null && ghosts.length > 0 && moreAvailable && (
             <g transform={`translate(${fanSrc.x},${fanSrc.y + NODE_R * 3.4 + NODE_R + 22})`}
               style={{ cursor: 'pointer' }}
               onMouseDown={e => { e.stopPropagation(); e.preventDefault() }}
@@ -367,6 +407,9 @@ export default function Board({ boardId }) {
       </svg>
       {embedderStatus === 'loading' && (
         <div style={chipStyle}>loading similarity model…</div>
+      )}
+      {discovering && (
+        <div style={{ ...chipStyle, top: 48 }}>✦ finding similar images…</div>
       )}
       {embedderStatus === 'error' && (
         <div style={{ ...chipStyle, borderColor: '#7a2d3a', color: '#ffc5d0' }}>

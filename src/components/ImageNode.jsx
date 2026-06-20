@@ -10,7 +10,7 @@ function resolveSrc(ref) {
   return /^https?:|^blob:|^data:/.test(ref) ? ref : publicUrl(ref)
 }
 
-export default function ImageNode({ node, x, y, isSelected, dimmed, pillCount = 0, onMouseDown, onExpand }) {
+export default function ImageNode({ node, x, y, isSelected, dimmed, canDiscover = false, onMouseDown, onExpand }) {
   const src = resolveSrc(node.thumbRef)
   const clipId = `clip-${node.id}`
   if (x == null || y == null) return null
@@ -57,16 +57,17 @@ export default function ImageNode({ node, x, y, isSelected, dimmed, pillCount = 
         <text x={NODE_R} y={SIZE + 12} textAnchor="middle" fontSize={9} fill="#8090b8"
           style={{ userSelect: 'none', pointerEvents: 'none' }}>{node.tags.join(' · ')}</text>
       )}
-      {pillCount > 0 && onExpand && (
+      {canDiscover && onExpand && (
         <g
           transform={`translate(${SIZE - 10},10)`}
           style={{ cursor: 'pointer' }}
           onMouseDown={e => { e.stopPropagation(); e.preventDefault() }}
           onClick={e => { e.stopPropagation(); onExpand(node.id) }}
         >
-          <circle r={11} fill="#5b6af0" stroke="#0c0c1a" strokeWidth={1.5} />
-          <text textAnchor="middle" dominantBaseline="central" fontSize={11} fontWeight={700}
-            fill="#fff" style={{ userSelect: 'none' }}>+{pillCount}</text>
+          <title>Discover similar images</title>
+          <circle r={12} fill="#5b6af0" stroke="#0c0c1a" strokeWidth={1.5} />
+          <text textAnchor="middle" dominantBaseline="central" fontSize={13}
+            fill="#fff" style={{ userSelect: 'none' }}>✦</text>
         </g>
       )}
     </g>

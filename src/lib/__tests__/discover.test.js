@@ -1,5 +1,20 @@
 import { expect, test } from 'vitest'
-import { buildSearchRequest, parsePhotos, searchPhotos, rankBySimilarity } from '../discover'
+import { buildSearchRequest, parsePhotos, searchPhotos, rankBySimilarity, deriveQuery } from '../discover'
+
+test('deriveQuery prefers user tags over the classifier', async () => {
+  const classify = async () => { throw new Error('should not run') }
+  const q = await deriveQuery({ tags: ['wooden', 'chair', 'mid-century', 'extra'] }, { classify, imageUrl: 'u' })
+  expect(q).toBe('wooden chair mid-century') // first 3 tags, classifier skipped
+})
+
+test('deriveQuery falls back to top-K zero-shot labels when untagged', async () => {
+  const classify = async (url, labels) => {
+    expect(url).toBe('u'); expect(labels.length).toBeGreaterThan(0)
+    return [{ label: 'chair', score: 0.7 }, { label: 'table', score: 0.2 }, { label: 'lamp', score: 0.1 }]
+  }
+  const q = await deriveQuery({ tags: [] }, { classify, imageUrl: 'u', topK: 2 })
+  expect(q).toBe('chair table')
+})
 
 test('buildSearchRequest: pexels uses bare key auth', () => {
   const r = buildSearchRequest('pexels', 'red chair', { key: 'K', perPage: 5 })

@@ -33,3 +33,19 @@ export async function embedImage(blobUrl) {
   const out = await pipe(blobUrl, { pooling: 'mean', normalize: true })
   return Array.from(out.data)   // plain JS number[] for JSONB
 }
+
+// Zero-shot classifier (same CLIP weights, different pipeline head) used to
+// auto-derive a stock-search query from an image. Lazily loaded; weights are
+// shared with the feature extractor so this is not a second model download.
+let _clf = null
+export async function classifyImage(imageUrl, labels) {
+  if (!_clf) {
+    try {
+      _clf = await pipeline('zero-shot-image-classification', 'Xenova/clip-vit-base-patch32', { device: 'webgpu' })
+    } catch {
+      _clf = await pipeline('zero-shot-image-classification', 'Xenova/clip-vit-base-patch32')
+    }
+  }
+  const out = await _clf(imageUrl, labels) // [{label,score}…] sorted desc
+  return out.map(({ label, score }) => ({ label, score }))
+}
