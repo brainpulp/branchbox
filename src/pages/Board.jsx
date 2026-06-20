@@ -7,7 +7,7 @@ import useBoardStore, { NODE_R } from '../lib/boardStore'
 import ImageNode from '../components/ImageNode'
 import ImportDropzone from '../components/ImportDropzone'
 import { hashBytes, downscaleImage, makeThumbnail } from '../lib/imageUtils'
-import { uploadImage, publicUrl } from '../lib/db'
+import { uploadImage, publicUrl, loadBoard, saveBoard } from '../lib/db'
 import { embedImage, onEmbedderState } from '../lib/embedder'
 import { createEmbedQueue } from '../lib/embedQueue'
 import { topNeighbors } from '../lib/similarity'
@@ -32,6 +32,9 @@ export default function Board({ boardId }) {
   const toastTimerRef = useRef(null)
   const queueRef = useRef(null)
   const dismissedRef = useRef(new Set()) // ids rejected during the open fan
+  const boardIdRef = useRef(boardId); boardIdRef.current = boardId
+  const loadedRef = useRef(false)        // gate autosave until the board has loaded
+  const saveTimerRef = useRef(null)
 
   const storeNodes = useBoardStore(s => s.nodes)
   const storeEdges = useBoardStore(s => s.edges)
@@ -121,8 +124,44 @@ export default function Board({ boardId }) {
       .forEach(n => queueRef.current.enqueue(n.id, publicUrl(n.imageRef)))
   }, [])
 
-  // Each board open starts from a clean in-session canvas (persistence lands in M7).
-  useEffect(() => { loadBoardData({ nodes: [], edges: [] }) }, [boardId, loadBoardData])
+  // Snapshot the doc with live sim positions folded in, and persist it.
+  const persist = useCallback(() => {
+    if (!loadedRef.current) return
+    const { nodes, edges } = useBoardStore.getState()
+    const posById = Object.fromEntries(simNodesRef.current.map(n => [n.id, n]))
+    const out = nodes.map(n => ({ ...n, x: posById[n.id]?.x ?? n.x, y: posById[n.id]?.y ?? n.y }))
+    saveBoard(boardIdRef.current, { nodes: out, edges }).catch(() => {})
+  }, [])
+
+  const scheduleSave = useCallback(() => {
+    clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(persist, 1500)
+  }, [persist])
+
+  // Load the board on open; resume embedding for anything that never finished.
+  useEffect(() => {
+    loadedRef.current = false
+    let cancelled = false
+    loadBoard(boardId)
+      .then(row => {
+        if (cancelled) return
+        loadBoardData({ nodes: row.nodes || [], edges: row.edges || [] })
+        useBoardStore.getState().nodes
+          .filter(n => !Array.isArray(n.embedding) && n.imageRef)
+          .forEach(n => queueRef.current.enqueue(n.id, publicUrl(n.imageRef)))
+      })
+      .catch(() => { if (!cancelled) loadBoardData({ nodes: [], edges: [] }) })
+      .finally(() => { if (!cancelled) loadedRef.current = true })
+    return () => { cancelled = true }
+  }, [boardId, loadBoardData])
+
+  // Debounced autosave: persist whenever the document topology changes.
+  useEffect(() => {
+    const unsub = useBoardStore.subscribe((state, prev) => {
+      if (state.nodes !== prev.nodes || state.edges !== prev.edges) scheduleSave()
+    })
+    return () => { unsub(); clearTimeout(saveTimerRef.current) }
+  }, [scheduleSave])
 
   const scheduleRender = useCallback(() => {
     if (frameRef.current) return
@@ -139,8 +178,8 @@ export default function Board({ boardId }) {
       const p = posById[n.id]
       return {
         id: n.id,
-        x: p?.x ?? cx + (Math.random() - 0.5) * 120,
-        y: p?.y ?? cy + (Math.random() - 0.5) * 120,
+        x: p?.x ?? n.x ?? cx + (Math.random() - 0.5) * 120,
+        y: p?.y ?? n.y ?? cy + (Math.random() - 0.5) * 120,
         vx: p?.vx ?? 0, vy: p?.vy ?? 0,
         fx: p?.fx ?? null, fy: p?.fy ?? null,
       }
@@ -157,13 +196,14 @@ export default function Board({ boardId }) {
         .force('collide', d3.forceCollide(NODE_R + 8))
         .alphaDecay(0.04).velocityDecay(0.5).alphaMin(0.005)
         .on('tick', scheduleRender)
+        .on('end', scheduleSave) // persist the settled layout
     } else {
       simRef.current.nodes(simNodesRef.current)
         .force('link', d3.forceLink(simEdgesRef.current).id(d => d.id).distance(120).strength(0.4))
         .alpha(0.5).restart()
     }
     scheduleRender()
-  }, [storeNodes, storeEdges, scheduleRender])
+  }, [storeNodes, storeEdges, scheduleRender, scheduleSave])
 
   // Zoom/pan — pan only on background (not on nodes).
   useEffect(() => {
