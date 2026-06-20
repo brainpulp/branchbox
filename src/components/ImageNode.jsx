@@ -21,6 +21,7 @@ export default function ImageNode({ node, x, y, isSelected, dimmed, pillCount = 
       transform={`translate(${x - NODE_R},${y - NODE_R})`}
       opacity={dimmed ? 0.2 : 1}
       onMouseDown={e => onMouseDown(e, node.id)}
+      onClick={e => e.stopPropagation()} // keep node clicks from clearing selection
       style={{ cursor: 'grab' }}
     >
       <clipPath id={clipId}>
