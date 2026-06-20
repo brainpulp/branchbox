@@ -15,20 +15,37 @@ Work built locally but not pushed is lost when the other device takes over. No e
 
 ## 🟢 HANDOFF — START HERE (resume on a new device)
 
-**Status (2026-06-18): spec + implementation plan both finalized, reviewed, and approved. NO CODE YET.** Next step is to execute the plan from milestone M0.
+**Status (2026-06-20): M0–M5 built, tested, and pushed.** The app imports images
+end-to-end. Next up is **M6 (expand/branch fan UX)**, then **M7 (persistence + deploy)**.
+
+- **Done:** M0 scaffold · M1 Supabase data layer + auth + boards shell · M2 board store +
+  lean D3 canvas · M3 imageUtils + similarity (TDD) · M4 CLIP embedder + embed queue ·
+  **M5 import flow** (`ImportDropzone`, hash-dedup → downscale/thumb → upload → embed;
+  load/error status chip). 18 vitest tests green.
+- **Backend is live** in PIM's Supabase project (`ikztpvxfgmhmrcwolwgx`): `bb_boards`
+  table (RLS on) + `branchbox-images` bucket both exist. `.env.local` holds the URL +
+  anon key (gitignored — recreate from `.env.example` via Supabase MCP on a new device).
+- **In-flight branch:** `claude/great-maxwell-s29j0u` (draft PR
+  [#1](https://github.com/brainpulp/branchbox/pull/1)), not merged to `master`.
+- **Deploy is staged but not live:** `gh-pages` branch is built + pushed, but the repo is
+  **private with Pages disabled** (HTTP 403). To go live: make the repo public, then
+  Settings → Pages → Source = `gh-pages` branch / root. Not yet done.
+- **Not built yet:** M6 (the "+N" pill → fan-out ghost suggestions → accept/reject →
+  provenance edge; tag editing) and M7 (JSONB autosave/load so boards survive reload).
+  Until M7, a reload wipes the in-session board.
 
 On a fresh device:
-1. `git pull` in `F:\code\branchbox`.
-2. (No `npm install` yet — the project isn't scaffolded; M0 does `npm create vite` + installs.)
+1. `git pull` then `npm install` in `F:\code\branchbox`.
+2. Recreate `.env.local` from `.env.example` (Supabase MCP `get_project_url` +
+   `get_publishable_keys` for project `ikztpvxfgmhmrcwolwgx`).
 3. Tell Claude:
-   > "Read CLAUDE.md and `docs/2026-06-18-branchbox-implementation-plan.md` in F:\code\branchbox, then start executing the plan at M0 using superpowers:subagent-driven-development (or executing-plans)."
+   > "Read CLAUDE.md and `docs/2026-06-18-branchbox-implementation-plan.md`, then continue
+   > the plan at M6 using superpowers:executing-plans."
 
 **Key docs (all in `docs/`):**
 - `2026-06-18-branchbox-implementation-plan.md` — **the build plan.** Milestones M0–M7, task-by-task, TDD steps, exact code/commands. This is what you execute.
 - `2026-06-18-branchbox-spec.md` — the finalized design spec (the "why" + decisions).
 - `2026-06-18-branchbox-design.md` — superseded brainstorm notes (ignore; kept for history).
-
-**Before M1 you must create the Supabase backend** (table + RLS + bucket) in PIM's project — see "Supabase backend" below. The Supabase MCP is available for this. Confirm with the user before running DB-creating commands.
 
 ---
 
