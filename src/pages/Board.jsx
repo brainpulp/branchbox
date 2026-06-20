@@ -7,8 +7,8 @@ import useBoardStore, { NODE_R } from '../lib/boardStore'
 import ImageNode from '../components/ImageNode'
 import ImportDropzone from '../components/ImportDropzone'
 import { hashBytes, downscaleImage, makeThumbnail } from '../lib/imageUtils'
-import { uploadImage } from '../lib/db'
-import { embedImage } from '../lib/embedder'
+import { uploadImage, publicUrl } from '../lib/db'
+import { embedImage, onEmbedderState } from '../lib/embedder'
 import { createEmbedQueue } from '../lib/embedQueue'
 
 // Lean fork of PIM's Graph.jsx D3↔React integration: sim in simRef, live
@@ -24,6 +24,7 @@ export default function Board({ boardId }) {
   const [, setTick] = useState(0)
   const [selectedId, setSelectedId] = useState(null)
   const [toast, setToast] = useState(null)
+  const [embedderStatus, setEmbedderStatus] = useState('idle') // idle|loading|ready|error
   const toastTimerRef = useRef(null)
   const queueRef = useRef(null)
 
@@ -77,6 +78,17 @@ export default function Board({ boardId }) {
       }
     }
   }, [boardId, addImageNode, setNodeRefs, showToast])
+
+  // Reflect the shared CLIP-model load state in a status chip.
+  useEffect(() => onEmbedderState(setEmbedderStatus), [])
+
+  // On model-load failure: re-enqueue every node that never reached `ready`,
+  // resolving its uploaded image back to a URL the embedder can read.
+  const retryEmbeddings = useCallback(() => {
+    useBoardStore.getState().nodes
+      .filter(n => n.status !== 'ready' && n.imageRef)
+      .forEach(n => queueRef.current.enqueue(n.id, publicUrl(n.imageRef)))
+  }, [])
 
   // Each board open starts from a clean in-session canvas (persistence lands in M7).
   useEffect(() => { loadBoardData({ nodes: [], edges: [] }) }, [boardId, loadBoardData])
@@ -199,6 +211,15 @@ export default function Board({ boardId }) {
           })}
         </g>
       </svg>
+      {embedderStatus === 'loading' && (
+        <div style={chipStyle}>loading similarity model…</div>
+      )}
+      {embedderStatus === 'error' && (
+        <div style={{ ...chipStyle, borderColor: '#7a2d3a', color: '#ffc5d0' }}>
+          similarity model failed
+          <button style={retryBtn} onClick={retryEmbeddings}>retry</button>
+        </div>
+      )}
       {toast && <div style={toastStyle}>{toast}</div>}
     </ImportDropzone>
   )
@@ -208,4 +229,16 @@ const toastStyle = {
   position: 'absolute', bottom: 16, left: '50%', transform: 'translateX(-50%)', zIndex: 30,
   padding: '0.5rem 0.9rem', borderRadius: 8, background: '#1a1a2e', border: '1px solid #2d3a6a',
   color: '#c5d0ff', fontSize: '0.82rem', boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+}
+
+const chipStyle = {
+  position: 'absolute', top: 12, right: 12, zIndex: 30,
+  display: 'flex', alignItems: 'center', gap: 8,
+  padding: '0.4rem 0.7rem', borderRadius: 8, background: '#111118', border: '1px solid #2d3a6a',
+  color: '#8090b8', fontSize: '0.78rem',
+}
+
+const retryBtn = {
+  padding: '0.15rem 0.5rem', borderRadius: 6, border: '1px solid #7a2d3a',
+  background: 'transparent', color: '#ffc5d0', cursor: 'pointer', fontSize: '0.75rem',
 }
