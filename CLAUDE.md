@@ -15,13 +15,15 @@ Work built locally but not pushed is lost when the other device takes over. No e
 
 ## 🟢 HANDOFF — START HERE (resume on a new device)
 
-**Status (2026-06-20): M0–M5 built, tested, and pushed.** The app imports images
-end-to-end. Next up is **M6 (expand/branch fan UX)**, then **M7 (persistence + deploy)**.
+**Status (2026-06-20): M0–M6 built, tested, and deployed live.** The app imports images
+*and* branches by visual similarity end-to-end. Only **M7 (persistence + verification)** remains.
 
 - **Done:** M0 scaffold · M1 Supabase data layer + auth + boards shell · M2 board store +
   lean D3 canvas · M3 imageUtils + similarity (TDD) · M4 CLIP embedder + embed queue ·
   **M5 import flow** (`ImportDropzone`, hash-dedup → downscale/thumb → upload → embed;
-  load/error status chip). 18 vitest tests green.
+  load/error status chip) · **M6 expand/branch UX** ("+N" pill → radial ghost fan →
+  ✓ accept (provenance edge) / ✕ reject → "show more"; node tag editing that nudges
+  ranking). 19 vitest tests green.
 - **Backend is live** in PIM's Supabase project (`ikztpvxfgmhmrcwolwgx`): `bb_boards`
   table (RLS on) + `branchbox-images` bucket both exist. `.env.local` holds the URL +
   anon key (gitignored — recreate from `.env.example` via Supabase MCP on a new device).
@@ -31,9 +33,9 @@ end-to-end. Next up is **M6 (expand/branch fan UX)**, then **M7 (persistence + d
   now public; Pages Source = `gh-pages` branch / root). Verified end-to-end on the live site:
   sign in → create board → import images → nodes go computing → ready. Redeploy with
   `npm run deploy`.
-- **Not built yet:** M6 (the "+N" pill → fan-out ghost suggestions → accept/reject →
-  provenance edge; tag editing) and M7 (JSONB autosave/load so boards survive reload).
-  Until M7, a reload wipes the in-session board.
+- **Not built yet:** M7 — JSONB autosave/load so boards survive reload (debounced
+  `saveBoard`, `loadBoard` on open, persist sim x/y), then the spec §8 verification
+  checklist. **Until M7, a reload wipes the in-session board.**
 
 On a fresh device:
 1. `git pull` then `npm install` in `F:\code\branchbox`.
@@ -41,7 +43,7 @@ On a fresh device:
    `get_publishable_keys` for project `ikztpvxfgmhmrcwolwgx`).
 3. Tell Claude:
    > "Read CLAUDE.md and `docs/2026-06-18-branchbox-implementation-plan.md`, then continue
-   > the plan at M6 using superpowers:executing-plans."
+   > the plan at M7 using superpowers:executing-plans."
 
 **Key docs (all in `docs/`):**
 - `2026-06-18-branchbox-implementation-plan.md` — **the build plan.** Milestones M0–M7, task-by-task, TDD steps, exact code/commands. This is what you execute.
