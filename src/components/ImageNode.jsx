@@ -10,7 +10,7 @@ function resolveSrc(ref) {
   return /^https?:|^blob:|^data:/.test(ref) ? ref : publicUrl(ref)
 }
 
-export default function ImageNode({ node, x, y, isSelected, onMouseDown }) {
+export default function ImageNode({ node, x, y, isSelected, dimmed, pillCount = 0, onMouseDown, onExpand }) {
   const src = resolveSrc(node.thumbRef)
   const clipId = `clip-${node.id}`
   if (x == null || y == null) return null
@@ -19,6 +19,7 @@ export default function ImageNode({ node, x, y, isSelected, onMouseDown }) {
     <g
       data-node
       transform={`translate(${x - NODE_R},${y - NODE_R})`}
+      opacity={dimmed ? 0.2 : 1}
       onMouseDown={e => onMouseDown(e, node.id)}
       style={{ cursor: 'grab' }}
     >
@@ -50,6 +51,22 @@ export default function ImageNode({ node, x, y, isSelected, onMouseDown }) {
           <text x={NODE_R} y={NODE_R} textAnchor="middle" dominantBaseline="middle"
             fontSize={10} fill="#9aa" style={{ userSelect: 'none' }}>computing…</text>
         </>
+      )}
+      {node.tags?.length > 0 && (
+        <text x={NODE_R} y={SIZE + 12} textAnchor="middle" fontSize={9} fill="#8090b8"
+          style={{ userSelect: 'none', pointerEvents: 'none' }}>{node.tags.join(' · ')}</text>
+      )}
+      {pillCount > 0 && onExpand && (
+        <g
+          transform={`translate(${SIZE - 10},10)`}
+          style={{ cursor: 'pointer' }}
+          onMouseDown={e => { e.stopPropagation(); e.preventDefault() }}
+          onClick={e => { e.stopPropagation(); onExpand(node.id) }}
+        >
+          <circle r={11} fill="#5b6af0" stroke="#0c0c1a" strokeWidth={1.5} />
+          <text textAnchor="middle" dominantBaseline="central" fontSize={11} fontWeight={700}
+            fill="#fff" style={{ userSelect: 'none' }}>+{pillCount}</text>
+        </g>
       )}
     </g>
   )

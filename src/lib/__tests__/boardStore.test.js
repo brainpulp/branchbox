@@ -56,6 +56,19 @@ test('setTags replaces a node tag set', () => {
   expect(useBoardStore.getState().nodes[0].tags).toEqual(['red', 'chair'])
 })
 
+test('expand → accept → clear ghost lifecycle', () => {
+  const store = () => useBoardStore.getState()
+  store().setGhosts('s', [{ id: 'g1' }, { id: 'g2' }])
+  expect(store().expandedFrom).toBe('s')
+  expect(store().ghosts.map(g => g.id)).toEqual(['g1', 'g2'])
+  store().addBranchEdge('s', 'g1')
+  expect(store().edges).toHaveLength(1)
+  expect(store().edges[0]).toMatchObject({ source: 's', target: 'g1', kind: 'branch' })
+  store().clearGhosts()
+  expect(store().ghosts).toEqual([])
+  expect(store().expandedFrom).toBeNull()
+})
+
 test('loadBoardData replaces topology', () => {
   useBoardStore.getState().loadBoardData({ nodes: [{ id: 'x', tags: [], embedding: null }], edges: [] })
   expect(useBoardStore.getState().nodes[0].id).toBe('x')
