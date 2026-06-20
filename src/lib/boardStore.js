@@ -14,11 +14,14 @@ const useBoardStore = create((set, get) => ({
     ghosts: [], expandedFrom: null,
   }),
 
-  addImageNode: ({ imageRef, thumbRef, w, h, status = 'computing' }) => {
+  addImageNode: ({ imageRef, thumbRef, w, h, hash = null, status = 'computing' }) => {
     const id = uid()
-    set(s => ({ nodes: [...s.nodes, { id, imageRef, thumbRef, w, h, embedding: null, tags: [], status }] }))
+    set(s => ({ nodes: [...s.nodes, { id, imageRef, thumbRef, w, h, hash, embedding: null, tags: [], status }] }))
     return id
   },
+  setNodeRefs: (id, imageRef, thumbRef) => set(s => ({
+    nodes: s.nodes.map(n => n.id === id ? { ...n, imageRef, thumbRef } : n),
+  })),
   setEmbedding: (id, embedding) => set(s => ({
     nodes: s.nodes.map(n => n.id === id ? { ...n, embedding, status: 'ready' } : n),
   })),

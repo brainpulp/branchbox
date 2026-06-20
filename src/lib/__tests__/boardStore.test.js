@@ -39,6 +39,17 @@ test('deleteNode removes the node and its edges', () => {
   expect(useBoardStore.getState().edges).toHaveLength(0)
 })
 
+test('addImageNode stores a hash when provided', () => {
+  const id = useBoardStore.getState().addImageNode({ imageRef: 'a', thumbRef: 'a', w: 1, h: 1, hash: 'deadbeef' })
+  expect(useBoardStore.getState().nodes[0].hash).toBe('deadbeef')
+})
+
+test('setNodeRefs updates image/thumb paths', () => {
+  const id = useBoardStore.getState().addImageNode({ imageRef: null, thumbRef: null, w: 1, h: 1 })
+  useBoardStore.getState().setNodeRefs(id, 'b/n.jpg', 'b/n.thumb.jpg')
+  expect(useBoardStore.getState().nodes[0]).toMatchObject({ imageRef: 'b/n.jpg', thumbRef: 'b/n.thumb.jpg' })
+})
+
 test('setTags replaces a node tag set', () => {
   const a = useBoardStore.getState().addImageNode({ imageRef: 'a', thumbRef: 'a', w: 1, h: 1 })
   useBoardStore.getState().setTags(a, ['red', 'chair'])
