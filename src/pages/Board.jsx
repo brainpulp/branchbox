@@ -43,7 +43,9 @@ export default function Board({ boardId }) {
   const setGhosts = useBoardStore(s => s.setGhosts)
   const clearGhosts = useBoardStore(s => s.clearGhosts)
   const addBranchEdge = useBoardStore(s => s.addBranchEdge)
+  const setTags = useBoardStore(s => s.setTags)
   const loadBoardData = useBoardStore(s => s.loadBoardData)
+  const [tagInput, setTagInput] = useState('')
 
   // ids already linked to `id` (either direction) — never suggested again.
   const connectedIds = useCallback((id) => {
@@ -263,6 +265,16 @@ export default function Board({ boardId }) {
   const ghostIdSet = new Set(ghosts.map(g => g.id))
   const pillCount = (selectedId && !expandedFrom) ? neighborsFor(selectedId, FAN_PAGE).length : 0
   const fanSrc = expandedFrom ? simNodesRef.current.find(n => n.id === expandedFrom) : null
+  const selectedNode = selectedId ? nodeById[selectedId] : null
+
+  const commitTag = () => {
+    const t = tagInput.trim().replace(/,+$/, '').trim()
+    setTagInput('')
+    if (!t || !selectedNode) return
+    const cur = selectedNode.tags || []
+    if (!cur.includes(t)) setTags(selectedId, [...cur, t])
+  }
+  const removeTag = (t) => setTags(selectedId, (selectedNode.tags || []).filter(x => x !== t))
 
   return (
     <ImportDropzone onFiles={importFiles}>
@@ -322,6 +334,26 @@ export default function Board({ boardId }) {
           <button style={retryBtn} onClick={retryEmbeddings}>retry</button>
         </div>
       )}
+      {selectedNode && (
+        <div style={tagPanel}>
+          <span style={{ color: '#8090b8', fontSize: '0.72rem' }}>tags</span>
+          {(selectedNode.tags || []).map(t => (
+            <span key={t} style={tagChip}>
+              {t}
+              <span style={tagX} onClick={() => removeTag(t)}>✕</span>
+            </span>
+          ))}
+          <input
+            style={tagInputStyle}
+            value={tagInput}
+            placeholder="add tag…"
+            onChange={e => setTagInput(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); e.stopPropagation(); commitTag() }
+            }}
+          />
+        </div>
+      )}
       {toast && <div style={toastStyle}>{toast}</div>}
     </ImportDropzone>
   )
@@ -343,6 +375,25 @@ const chipStyle = {
 const retryBtn = {
   padding: '0.15rem 0.5rem', borderRadius: 6, border: '1px solid #7a2d3a',
   background: 'transparent', color: '#ffc5d0', cursor: 'pointer', fontSize: '0.75rem',
+}
+
+const tagPanel = {
+  position: 'absolute', bottom: 16, left: 16, zIndex: 30,
+  display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', maxWidth: 360,
+  padding: '0.45rem 0.6rem', borderRadius: 8, background: '#111118', border: '1px solid #2d3a6a',
+}
+
+const tagChip = {
+  display: 'inline-flex', alignItems: 'center', gap: 5,
+  padding: '0.1rem 0.45rem', borderRadius: 12, background: '#1f2a4d',
+  color: '#c5d0ff', fontSize: '0.74rem',
+}
+
+const tagX = { cursor: 'pointer', color: '#8090b8', fontSize: '0.66rem' }
+
+const tagInputStyle = {
+  width: 90, padding: '0.2rem 0.4rem', borderRadius: 6, border: '1px solid #2d3a6a',
+  background: '#0c0c1a', color: '#c5d0ff', fontSize: '0.74rem', outline: 'none',
 }
 
 // A translucent suggestion floated around the source, with inline ✓/✕.
