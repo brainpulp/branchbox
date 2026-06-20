@@ -27,9 +27,10 @@ end-to-end. Next up is **M6 (expand/branch fan UX)**, then **M7 (persistence + d
   anon key (gitignored — recreate from `.env.example` via Supabase MCP on a new device).
 - **In-flight branch:** `claude/great-maxwell-s29j0u` (draft PR
   [#1](https://github.com/brainpulp/branchbox/pull/1)), not merged to `master`.
-- **Deploy is staged but not live:** `gh-pages` branch is built + pushed, but the repo is
-  **private with Pages disabled** (HTTP 403). To go live: make the repo public, then
-  Settings → Pages → Source = `gh-pages` branch / root. Not yet done.
+- **Live:** deployed to GitHub Pages at **https://brainpulp.github.io/branchbox/** (repo is
+  now public; Pages Source = `gh-pages` branch / root). Verified end-to-end on the live site:
+  sign in → create board → import images → nodes go computing → ready. Redeploy with
+  `npm run deploy`.
 - **Not built yet:** M6 (the "+N" pill → fan-out ghost suggestions → accept/reject →
   provenance edge; tag editing) and M7 (JSONB autosave/load so boards survive reload).
   Until M7, a reload wipes the in-session board.
