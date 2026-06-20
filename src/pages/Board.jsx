@@ -5,6 +5,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import * as d3 from 'd3'
 import useBoardStore, { NODE_R } from '../lib/boardStore'
 import ImageNode from '../components/ImageNode'
+import ImportDropzone from '../components/ImportDropzone'
+import { hashBytes, downscaleImage, makeThumbnail } from '../lib/imageUtils'
+import { uploadImage } from '../lib/db'
+import { embedImage } from '../lib/embedder'
+import { createEmbedQueue } from '../lib/embedQueue'
 
 // Lean fork of PIM's Graph.jsx D3↔React integration: sim in simRef, live
 // positions in mutable simNodesRef, React re-renders via rAF-throttled setTick.
@@ -18,12 +23,60 @@ export default function Board({ boardId }) {
   const frameRef = useRef(null)
   const [, setTick] = useState(0)
   const [selectedId, setSelectedId] = useState(null)
+  const [toast, setToast] = useState(null)
+  const toastTimerRef = useRef(null)
+  const queueRef = useRef(null)
 
   const storeNodes = useBoardStore(s => s.nodes)
   const storeEdges = useBoardStore(s => s.edges)
   const addImageNode = useBoardStore(s => s.addImageNode)
+  const setNodeRefs = useBoardStore(s => s.setNodeRefs)
   const setNodePos = useBoardStore(s => s.setNodePos)
   const loadBoardData = useBoardStore(s => s.loadBoardData)
+
+  const showToast = useCallback((msg) => {
+    setToast(msg)
+    clearTimeout(toastTimerRef.current)
+    toastTimerRef.current = setTimeout(() => setToast(null), 2800)
+  }, [])
+
+  // Embed queue: revoke the object URL once embedding settles; store actions
+  // are read fresh via getState() to avoid stale closures.
+  if (!queueRef.current) {
+    queueRef.current = createEmbedQueue({
+      embed: async (url) => { try { return await embedImage(url) } finally { URL.revokeObjectURL(url) } },
+      onReady: (id, embedding) => useBoardStore.getState().setEmbedding(id, embedding),
+      onError: (id) => useBoardStore.getState().setNodeStatus(id, 'error'),
+    })
+  }
+
+  // Import pipeline: hash-dedup → downscale + thumb → computing node → upload →
+  // refs → enqueue for embedding (flips computing → ready).
+  const importFiles = useCallback(async (fileList) => {
+    const files = Array.from(fileList).filter(f => f.type.startsWith('image/'))
+    for (const file of files) {
+      try {
+        const hash = await hashBytes(await file.arrayBuffer())
+        if (useBoardStore.getState().nodes.some(n => n.hash === hash)) {
+          showToast('Skipped a duplicate image'); continue
+        }
+        const { blob: fullBlob, w, h } = await downscaleImage(file)
+        const thumbBlob = await makeThumbnail(file)
+        const nodeId = addImageNode({ imageRef: null, thumbRef: null, w, h, hash, status: 'computing' })
+        try {
+          const fullPath = await uploadImage(fullBlob, boardId, nodeId, 'full')
+          const thumbPath = await uploadImage(thumbBlob, boardId, nodeId, 'thumb')
+          setNodeRefs(nodeId, fullPath, thumbPath)
+          queueRef.current.enqueue(nodeId, URL.createObjectURL(fullBlob))
+        } catch {
+          useBoardStore.getState().setNodeStatus(nodeId, 'error')
+          showToast('Upload failed — check the storage bucket')
+        }
+      } catch {
+        showToast('Could not read an image')
+      }
+    }
+  }, [boardId, addImageNode, setNodeRefs, showToast])
 
   // Each board open starts from a clean in-session canvas (persistence lands in M7).
   useEffect(() => { loadBoardData({ nodes: [], edges: [] }) }, [boardId, loadBoardData])
@@ -119,19 +172,11 @@ export default function Board({ boardId }) {
     document.addEventListener('mouseup', onUp)
   }, [clientToSim, setNodePos])
 
-  // Temporary (removed in M5 when real import lands): drop a placeholder node.
-  const addTestNode = () => {
-    const seed = Math.floor(Math.random() * 1e6)
-    const url = `https://picsum.photos/seed/${seed}/256`
-    addImageNode({ imageRef: url, thumbRef: url, w: 256, h: 256, status: 'ready' })
-  }
-
   const T = zoomTransformRef.current
   const nodeById = Object.fromEntries(storeNodes.map(n => [n.id, n]))
 
   return (
-    <div style={{ position: 'relative', height: '100%', overflow: 'hidden' }}>
-      <button style={testBtn} onClick={addTestNode}>＋ test node</button>
+    <ImportDropzone onFiles={importFiles}>
       <svg ref={svgRef} style={{ width: '100%', height: '100%', background: '#0c0c1a', display: 'block' }}
         onClick={() => setSelectedId(null)}>
         <defs>
@@ -154,12 +199,13 @@ export default function Board({ boardId }) {
           })}
         </g>
       </svg>
-    </div>
+      {toast && <div style={toastStyle}>{toast}</div>}
+    </ImportDropzone>
   )
 }
 
-const testBtn = {
-  position: 'absolute', top: 12, left: 12, zIndex: 10,
-  padding: '0.4rem 0.8rem', borderRadius: 8, border: '1px dashed #2d3a6a',
-  background: '#111118', color: '#5b6af0', cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600,
+const toastStyle = {
+  position: 'absolute', bottom: 16, left: '50%', transform: 'translateX(-50%)', zIndex: 30,
+  padding: '0.5rem 0.9rem', borderRadius: 8, background: '#1a1a2e', border: '1px solid #2d3a6a',
+  color: '#c5d0ff', fontSize: '0.82rem', boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
 }
