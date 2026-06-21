@@ -8,19 +8,19 @@ import ImageNode from '../components/ImageNode'
 import ImportDropzone from '../components/ImportDropzone'
 import { hashBytes, downscaleImage, makeThumbnail } from '../lib/imageUtils'
 import { uploadImage, publicUrl, loadBoard, saveBoard } from '../lib/db'
+import { supabase } from '../lib/supabase'
 import { embedImage, onEmbedderState } from '../lib/embedder'
 import { createEmbedQueue } from '../lib/embedQueue'
-import { searchPhotos, rankBySimilarity } from '../lib/discover'
+import { searchVisual, proxiedImageUrl } from '../lib/discover'
 
 const FAN_PAGE = 5 // suggestions revealed per "show more"
 
-// Pluggable discovery source: whichever stock-photo key is configured.
-// (Swapping to web/reverse-image search later = a new adapter in discover.js.)
-const STOCK = import.meta.env.VITE_PEXELS_KEY
-  ? { provider: 'pexels', key: import.meta.env.VITE_PEXELS_KEY }
-  : import.meta.env.VITE_UNSPLASH_KEY
-    ? { provider: 'unsplash', key: import.meta.env.VITE_UNSPLASH_KEY }
-    : null
+// Reverse-image discovery runs through a Supabase Edge Function (hides the
+// SerpAPI key + provides CORS). Available whenever Supabase is configured.
+const FUNCTION_URL = import.meta.env.VITE_SUPABASE_URL
+  ? `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/discover`
+  : null
+const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
 
 // Lean fork of PIM's Graph.jsx D3↔React integration: sim in simRef, live
 // positions in mutable simNodesRef, React re-renders via rAF-throttled setTick.
@@ -38,8 +38,6 @@ export default function Board({ boardId }) {
   const [embedderStatus, setEmbedderStatus] = useState('idle') // idle|loading|ready|error
   const [fanLimit, setFanLimit] = useState(FAN_PAGE)
   const [discovering, setDiscovering] = useState(false)
-  const [discoverQuery, setDiscoverQuery] = useState(null) // null = search box closed
-  const discoverSrcRef = useRef(null)
   const toastTimerRef = useRef(null)
   const queueRef = useRef(null)
   const dismissedRef = useRef(new Set()) // ids removed (rejected/accepted) during the open fan
@@ -108,9 +106,12 @@ export default function Board({ boardId }) {
     }
   }, [importBlob, showToast])
 
-  // Download a discovered stock photo into the board as a real node.
+  // Download an accepted match into the board — via the proxy (CORS-safe).
   const importFromUrl = useCallback(async (url) => {
-    const res = await fetch(url)
+    const { data: { session } } = await supabase.auth.getSession()
+    const res = await fetch(proxiedImageUrl(FUNCTION_URL, url), {
+      headers: { Authorization: `Bearer ${session?.access_token}`, apikey: ANON_KEY },
+    })
     if (!res.ok) throw new Error(`download failed: ${res.status}`)
     return importBlob(await res.blob())
   }, [importBlob])
@@ -266,47 +267,33 @@ export default function Board({ boardId }) {
     setGhosts(srcId, list.map(toGhost))
   }, [setGhosts])
 
-  // Pill click → open the discover search box, prefilled from the node's tags.
-  const handleExpand = useCallback((srcId) => {
-    if (!STOCK) { showToast('Add a Pexels or Unsplash API key to discover'); return }
-    const src = useBoardStore.getState().nodes.find(n => n.id === srcId)
-    if (!src || !Array.isArray(src.embedding)) { showToast('Image is still computing…'); return }
-    setSelectedId(srcId)
-    discoverSrcRef.current = srcId
-    setDiscoverQuery((src.tags || []).slice(0, 3).join(' '))
-  }, [showToast])
-
-  // Run discovery for a typed query: search the stock source, then CLIP-rank
-  // the candidates against the source image and fan out the best as ghosts.
-  // Each stage is logged + toasted so a slow step never looks like a hang.
-  const runDiscover = useCallback(async (queryRaw) => {
-    const srcId = discoverSrcRef.current
-    const query = (queryRaw || '').trim()
-    if (!srcId || !query) return
+  // ✦ click → reverse-image search: send THIS image to Google Lens (via the
+  // proxy), fan out visually-similar new images. No query, no typing.
+  const handleExpand = useCallback(async (srcId) => {
+    if (!FUNCTION_URL) { showToast('Discovery backend not configured'); return }
     const src = useBoardStore.getState().nodes.find(n => n.id === srcId)
     if (!src) return
-    setDiscoverQuery(null)
+    if (!src.imageRef) { showToast('Image is still uploading…'); return }
+    setSelectedId(srcId)
     setDiscovering(true)
     dismissedRef.current = new Set()
     rankedRef.current = []
     setFanLimit(FAN_PAGE)
     try {
-      console.log('[discover] searching', STOCK.provider, query)
-      const candidates = await searchPhotos({ ...STOCK, query, perPage: 12 })
-      console.log('[discover] candidates', candidates.length)
-      if (!candidates.length) { showToast(`No results for “${query}”`); return }
-      showToast(`Ranking ${candidates.length} matches…`)
-      const ranked = await rankBySimilarity(src.embedding, candidates, {
-        embed: (u) => embedImage(u), limit: 12,
+      const imageUrl = publicUrl(src.imageRef)
+      const { data: { session } } = await supabase.auth.getSession()
+      console.log('[discover] reverse-image search for', imageUrl)
+      const matches = await searchVisual({
+        functionUrl: FUNCTION_URL, token: session?.access_token, anonKey: ANON_KEY, imageUrl,
       })
-      console.log('[discover] ranked', ranked.length, 'of', candidates.length)
-      if (!ranked.length) { showToast('Could not read those images (CORS) — try again'); return }
-      rankedRef.current = ranked
+      console.log('[discover] matches', matches.length)
+      if (!matches.length) { showToast('No visual matches found'); return }
+      rankedRef.current = matches
       renderFan(srcId, FAN_PAGE)
-      showToast(`Found ${ranked.length} for “${query}”`)
+      showToast(`Found ${matches.length} visually similar`)
     } catch (e) {
       console.error('[discover] failed', e)
-      showToast('Discovery failed: ' + (e?.message || 'network/API key'))
+      showToast('Discovery failed: ' + (e?.message || 'network'))
     } finally {
       setDiscovering(false)
     }
@@ -342,7 +329,6 @@ export default function Board({ boardId }) {
     dismissedRef.current = new Set()
     rankedRef.current = []
     setFanLimit(FAN_PAGE)
-    setDiscoverQuery(null)
     clearGhosts()
   }, [clearGhosts])
 
@@ -362,7 +348,7 @@ export default function Board({ boardId }) {
   const ghostIdSet = new Set(ghosts.map(g => g.id))
   const fanSrc = expandedFrom ? simNodesRef.current.find(n => n.id === expandedFrom) : null
   const selectedNode = selectedId ? nodeById[selectedId] : null
-  const canDiscover = !!STOCK && !expandedFrom && !!selectedNode && Array.isArray(selectedNode.embedding)
+  const canDiscover = !!FUNCTION_URL && !expandedFrom && !!selectedNode && !!selectedNode.imageRef
   const moreAvailable = rankedRef.current.filter(c => !dismissedRef.current.has(c.id)).length > ghosts.length
 
   const commitTag = () => {
@@ -427,21 +413,7 @@ export default function Board({ boardId }) {
         <div style={chipStyle}>loading similarity model…</div>
       )}
       {discovering && (
-        <div style={{ ...chipStyle, top: 48 }}>✦ finding similar images…</div>
-      )}
-      {discoverQuery !== null && (
-        <div style={discoverBar}>
-          <span style={{ color: '#8090b8', fontSize: '0.78rem' }}>✦ discover</span>
-          <input autoFocus style={discoverInput} value={discoverQuery}
-            placeholder="describe what to find (e.g. wooden chair)…"
-            onChange={e => setDiscoverQuery(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); runDiscover(discoverQuery) }
-              if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setDiscoverQuery(null) }
-            }} />
-          <button style={discoverBtn} onMouseDown={e => e.preventDefault()}
-            onClick={() => runDiscover(discoverQuery)}>Search</button>
-        </div>
+        <div style={{ ...chipStyle, top: 48 }}>✦ finding visually similar images…</div>
       )}
       {embedderStatus === 'error' && (
         <div style={{ ...chipStyle, borderColor: '#7a2d3a', color: '#ffc5d0' }}>
@@ -490,23 +462,6 @@ const chipStyle = {
 const retryBtn = {
   padding: '0.15rem 0.5rem', borderRadius: 6, border: '1px solid #7a2d3a',
   background: 'transparent', color: '#ffc5d0', cursor: 'pointer', fontSize: '0.75rem',
-}
-
-const discoverBar = {
-  position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 40,
-  display: 'flex', alignItems: 'center', gap: 8,
-  padding: '0.5rem 0.7rem', borderRadius: 10, background: '#111118', border: '1px solid #5b6af0',
-  boxShadow: '0 6px 24px rgba(0,0,0,0.5)',
-}
-
-const discoverInput = {
-  width: 280, padding: '0.35rem 0.55rem', borderRadius: 7, border: '1px solid #2d3a6a',
-  background: '#0c0c1a', color: '#c5d0ff', fontSize: '0.85rem', outline: 'none',
-}
-
-const discoverBtn = {
-  padding: '0.35rem 0.8rem', borderRadius: 7, border: 'none',
-  background: '#5b6af0', color: '#fff', cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600,
 }
 
 const tagPanel = {

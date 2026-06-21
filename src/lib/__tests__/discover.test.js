@@ -1,5 +1,27 @@
 import { expect, test } from 'vitest'
-import { buildSearchRequest, parsePhotos, searchPhotos, rankBySimilarity, deriveQuery } from '../discover'
+import { buildSearchRequest, parsePhotos, searchPhotos, rankBySimilarity, deriveQuery, searchVisual, proxiedImageUrl } from '../discover'
+
+test('searchVisual posts the image URL with auth and returns matches', async () => {
+  const fetchFn = async (url, opts) => {
+    expect(url).toBe('https://x.fn/discover')
+    expect(opts.headers.Authorization).toBe('Bearer T')
+    expect(JSON.parse(opts.body)).toEqual({ imageUrl: 'IMG' })
+    return { ok: true, json: async () => ({ matches: [{ id: 'lens-0', thumbUrl: 't' }] }) }
+  }
+  const out = await searchVisual({ functionUrl: 'https://x.fn/discover', token: 'T', imageUrl: 'IMG', fetchFn })
+  expect(out).toEqual([{ id: 'lens-0', thumbUrl: 't' }])
+})
+
+test('searchVisual surfaces a proxy error body', async () => {
+  const fetchFn = async () => ({ ok: false, json: async () => ({ error: 'SERPAPI_KEY not configured' }) })
+  await expect(searchVisual({ functionUrl: 'u', token: 'T', imageUrl: 'IMG', fetchFn }))
+    .rejects.toThrow('SERPAPI_KEY not configured')
+})
+
+test('proxiedImageUrl encodes the target image url', () => {
+  expect(proxiedImageUrl('https://x.fn/discover', 'https://a.b/c?d=e'))
+    .toBe('https://x.fn/discover?img=https%3A%2F%2Fa.b%2Fc%3Fd%3De')
+})
 
 test('deriveQuery prefers user tags over the classifier', async () => {
   const classify = async () => { throw new Error('should not run') }

@@ -1,5 +1,29 @@
 import { cosine } from './similarity'
 
+// --- Visual (reverse-image) discovery via the Supabase Edge Function proxy ---
+// The proxy calls SerpAPI Google Lens server-side and returns images that
+// actually LOOK LIKE the source — no text query needed.
+
+export async function searchVisual({ functionUrl, token, anonKey, imageUrl, fetchFn = fetch }) {
+  const res = await fetchFn(functionUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      ...(anonKey ? { apikey: anonKey } : {}),
+    },
+    body: JSON.stringify({ imageUrl }),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok || data.error) throw new Error(data.error || `discover ${res.status}`)
+  return data.matches || []
+}
+
+// CORS-safe URL to fetch an accepted match's bytes back through the proxy.
+export function proxiedImageUrl(functionUrl, imageUrl) {
+  return `${functionUrl}?img=${encodeURIComponent(imageUrl)}`
+}
+
 // A small vocabulary of common photographic subjects/scenes. CLIP zero-shot
 // scores the source image against these to auto-derive a search query, so
 // expanding a node needs no typing. Tags, when present, override this.
