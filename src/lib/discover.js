@@ -20,8 +20,11 @@ export async function searchVisual({ functionUrl, token, anonKey, imageUrl, fetc
 }
 
 // CORS-safe URL to fetch an accepted match's bytes back through the proxy.
-export function proxiedImageUrl(functionUrl, imageUrl) {
-  return `${functionUrl}?img=${encodeURIComponent(imageUrl)}`
+// apiKey (optional) is appended as a query param for contexts that can't set
+// headers (e.g. an <img crossOrigin> used for colour sampling).
+export function proxiedImageUrl(functionUrl, imageUrl, apiKey) {
+  const base = `${functionUrl}?img=${encodeURIComponent(imageUrl)}`
+  return apiKey ? `${base}&apikey=${apiKey}` : base
 }
 
 // A small vocabulary of common photographic subjects/scenes. CLIP zero-shot
