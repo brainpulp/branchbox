@@ -39,10 +39,34 @@ test('deleteNode removes the node and its edges', () => {
   expect(useBoardStore.getState().edges).toHaveLength(0)
 })
 
+test('addImageNode stores a hash when provided', () => {
+  const id = useBoardStore.getState().addImageNode({ imageRef: 'a', thumbRef: 'a', w: 1, h: 1, hash: 'deadbeef' })
+  expect(useBoardStore.getState().nodes[0].hash).toBe('deadbeef')
+})
+
+test('setNodeRefs updates image/thumb paths', () => {
+  const id = useBoardStore.getState().addImageNode({ imageRef: null, thumbRef: null, w: 1, h: 1 })
+  useBoardStore.getState().setNodeRefs(id, 'b/n.jpg', 'b/n.thumb.jpg')
+  expect(useBoardStore.getState().nodes[0]).toMatchObject({ imageRef: 'b/n.jpg', thumbRef: 'b/n.thumb.jpg' })
+})
+
 test('setTags replaces a node tag set', () => {
   const a = useBoardStore.getState().addImageNode({ imageRef: 'a', thumbRef: 'a', w: 1, h: 1 })
   useBoardStore.getState().setTags(a, ['red', 'chair'])
   expect(useBoardStore.getState().nodes[0].tags).toEqual(['red', 'chair'])
+})
+
+test('expand → accept → clear ghost lifecycle', () => {
+  const store = () => useBoardStore.getState()
+  store().setGhosts('s', [{ id: 'g1' }, { id: 'g2' }])
+  expect(store().expandedFrom).toBe('s')
+  expect(store().ghosts.map(g => g.id)).toEqual(['g1', 'g2'])
+  store().addBranchEdge('s', 'g1')
+  expect(store().edges).toHaveLength(1)
+  expect(store().edges[0]).toMatchObject({ source: 's', target: 'g1', kind: 'branch' })
+  store().clearGhosts()
+  expect(store().ghosts).toEqual([])
+  expect(store().expandedFrom).toBeNull()
 })
 
 test('loadBoardData replaces topology', () => {

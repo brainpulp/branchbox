@@ -15,20 +15,44 @@ Work built locally but not pushed is lost when the other device takes over. No e
 
 ## 🟢 HANDOFF — START HERE (resume on a new device)
 
-**Status (2026-06-18): spec + implementation plan both finalized, reviewed, and approved. NO CODE YET.** Next step is to execute the plan from milestone M0.
+**Status (2026-06-20): M0–M7 built, tested, and deployed live — v1 feature-complete.** The
+app imports images, branches by visual similarity, and **persists boards across reload**.
+Remaining: a hands-on pass of `docs/verification-checklist.md` on the live site, then mark
+PR #1 ready and merge.
+
+- **Done:** M0 scaffold · M1 Supabase data layer + auth + boards shell · M2 board store +
+  lean D3 canvas · M3 imageUtils + similarity (TDD) · M4 CLIP embedder + embed queue ·
+  **M5 import flow** (`ImportDropzone`, hash-dedup → downscale/thumb → upload → embed;
+  load/error status chip) · **M6 expand/branch UX** ("+N" pill → radial ghost fan →
+  ✓ accept (provenance edge) / ✕ reject → "show more"; node tag editing that nudges
+  ranking) · **M7 persistence** (load board JSONB on open, debounced autosave folding
+  live sim positions in, settled-layout save on d3 'end'; layout/edges/tags survive
+  reload). 19 vitest tests green.
+- **Backend is live** in PIM's Supabase project (`ikztpvxfgmhmrcwolwgx`): `bb_boards`
+  table (RLS on) + `branchbox-images` bucket both exist. `.env.local` holds the URL +
+  anon key (gitignored — recreate from `.env.example` via Supabase MCP on a new device).
+- **In-flight branch:** `claude/great-maxwell-s29j0u` (draft PR
+  [#1](https://github.com/brainpulp/branchbox/pull/1)), not merged to `master`.
+- **Live:** deployed to GitHub Pages at **https://brainpulp.github.io/branchbox/** (repo is
+  now public; Pages Source = `gh-pages` branch / root). Verified end-to-end on the live site:
+  sign in → create board → import images → nodes go computing → ready. Redeploy with
+  `npm run deploy`.
+- **Left to do:** run `docs/verification-checklist.md` on the live site (import 4 chairs +
+  4 landscapes, confirm chairs out-rank landscapes, tag-nudge, dedup, reload-persists,
+  RLS scoping). Fix anything it surfaces, then flip PR #1 from draft → ready and merge.
 
 On a fresh device:
-1. `git pull` in `F:\code\branchbox`.
-2. (No `npm install` yet — the project isn't scaffolded; M0 does `npm create vite` + installs.)
+1. `git pull` then `npm install` in `F:\code\branchbox`.
+2. Recreate `.env.local` from `.env.example` (Supabase MCP `get_project_url` +
+   `get_publishable_keys` for project `ikztpvxfgmhmrcwolwgx`).
 3. Tell Claude:
-   > "Read CLAUDE.md and `docs/2026-06-18-branchbox-implementation-plan.md` in F:\code\branchbox, then start executing the plan at M0 using superpowers:subagent-driven-development (or executing-plans)."
+   > "Read CLAUDE.md and `docs/2026-06-18-branchbox-implementation-plan.md`, then run the
+   > verification checklist and close out v1."
 
 **Key docs (all in `docs/`):**
 - `2026-06-18-branchbox-implementation-plan.md` — **the build plan.** Milestones M0–M7, task-by-task, TDD steps, exact code/commands. This is what you execute.
 - `2026-06-18-branchbox-spec.md` — the finalized design spec (the "why" + decisions).
 - `2026-06-18-branchbox-design.md` — superseded brainstorm notes (ignore; kept for history).
-
-**Before M1 you must create the Supabase backend** (table + RLS + bucket) in PIM's project — see "Supabase backend" below. The Supabase MCP is available for this. Confirm with the user before running DB-creating commands.
 
 ---
 
