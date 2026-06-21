@@ -1,4 +1,4 @@
-import { classifyOrient, rgbToHsv, classifyMood, passesCriteria } from '../criteria'
+import { classifyOrient, rgbToHsv, classifyMood, passesCriteria, selectCandidates } from '../criteria'
 
 test('classifyOrient buckets by aspect ratio', () => {
   expect(classifyOrient(1600, 900)).toBe('wide')
@@ -28,4 +28,16 @@ test('passesCriteria narrows only on measured attributes', () => {
   expect(passesCriteria(wideWarm, { mood: 'cool' })).toBe(false)
   // unknown attrs never exclude
   expect(passesCriteria({}, { orient: 'wide', mood: 'cool' })).toBe(true)
+})
+
+test('selectCandidates caps depth by similarity, drops dismissed + filtered', () => {
+  const ranked = Array.from({ length: 20 }, (_, i) => ({ id: `c${i}`, orient: i % 2 ? 'wide' : 'tall' }))
+  const none = new Set()
+  expect(selectCandidates(ranked, none, { similarity: 'strict' })).toHaveLength(6)
+  expect(selectCandidates(ranked, none, { similarity: 'balanced' })).toHaveLength(14)
+  expect(selectCandidates(ranked, none, { similarity: 'loose' })).toHaveLength(20)
+  // dismissed removed
+  expect(selectCandidates(ranked, new Set(['c0', 'c1']), { similarity: 'loose' })).toHaveLength(18)
+  // filter applies within the depth window
+  expect(selectCandidates(ranked, none, { similarity: 'strict', orient: 'wide' })).toHaveLength(3)
 })

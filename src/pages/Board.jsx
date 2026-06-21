@@ -12,7 +12,7 @@ import { supabase } from '../lib/supabase'
 import { embedImage, onEmbedderState } from '../lib/embedder'
 import { createEmbedQueue } from '../lib/embedQueue'
 import { searchVisual, proxiedImageUrl } from '../lib/discover'
-import { classifyOrient, classifyMood, passesCriteria } from '../lib/criteria'
+import { classifyOrient, classifyMood, selectCandidates } from '../lib/criteria'
 
 const FAN_PAGE = 5 // suggestions revealed per "show more"
 
@@ -41,7 +41,7 @@ export default function Board({ boardId }) {
   const fanLimitRef = useRef(FAN_PAGE); fanLimitRef.current = fanLimit
   const [discovering, setDiscovering] = useState(false)
   const discoveringRef = useRef(false); discoveringRef.current = discovering
-  const [criteria, setCriteria] = useState({ orient: 'any', mood: 'any' })
+  const [criteria, setCriteria] = useState({ similarity: 'balanced', orient: 'any', mood: 'any' })
   const criteriaRef = useRef(criteria); criteriaRef.current = criteria
   const [, setSpinnerTick] = useState(0)     // drives slot-machine re-renders
   const spinnerSlotsRef = useRef([])         // current deck image per spinner slot
@@ -271,10 +271,9 @@ export default function Board({ boardId }) {
 
   const toGhost = (c) => ({ id: c.id, thumbRef: c.thumbUrl, url: c.url, score: c.score })
 
-  // Candidates still in play: not dismissed and passing the active criteria.
-  const visibleRanked = useCallback(() => rankedRef.current.filter(
-    c => !dismissedRef.current.has(c.id) && passesCriteria(c, criteriaRef.current),
-  ), [])
+  // Candidates still in play: top-N by similarity, minus dismissed/filtered.
+  const visibleRanked = useCallback(
+    () => selectCandidates(rankedRef.current, dismissedRef.current, criteriaRef.current), [])
 
   // Recompute the visible fan from the ranked candidate list, honouring
   // dismissals, the criteria filter, and the current reveal limit.
@@ -320,43 +319,58 @@ export default function Board({ boardId }) {
     }
   }, [showToast, renderFan, clearGhosts])
 
-  // ✓ accept → download the photo into the board + draw the provenance edge.
-  const acceptGhost = useCallback(async (srcId, ghostId) => {
-    const ghost = useBoardStore.getState().ghosts.find(g => g.id === ghostId)
-    dismissedRef.current.add(ghostId)
-    setGhosts(srcId, useBoardStore.getState().ghosts.filter(g => g.id !== ghostId))
-    if (!ghost?.url) return
-    try {
-      const newId = await importFromUrl(ghost.url)
-      if (newId) addBranchEdge(srcId, newId)
-    } catch {
-      showToast('Could not add that image')
-    }
-  }, [addBranchEdge, setGhosts, importFromUrl, showToast])
-
-  // ✕ reject → remember the dismissal so "show more" won't resurface it.
-  const rejectGhost = useCallback((srcId, ghostId) => {
-    dismissedRef.current.add(ghostId)
-    setGhosts(srcId, useBoardStore.getState().ghosts.filter(g => g.id !== ghostId))
-  }, [setGhosts])
-
-  // ✓✓ keep all → import every currently-shown ghost, then reveal the next page.
-  const acceptAll = useCallback(async (srcId) => {
-    const current = useBoardStore.getState().ghosts.slice()
-    if (!current.length) return
-    current.forEach(g => dismissedRef.current.add(g.id))
+  // Import a set of ghosts into the board (each gets a provenance edge),
+  // dismiss the whole batch, then reveal the next page. Shared by every
+  // "keep" action below.
+  const keepGhosts = useCallback(async (srcId, toKeep, alsoDismiss = []) => {
+    [...toKeep, ...alsoDismiss].forEach(g => dismissedRef.current.add(g.id))
     setGhosts(srcId, [])
     let kept = 0
-    for (const g of current) {
+    for (const g of toKeep) {
       if (!g.url) continue
       try {
         const newId = await importFromUrl(g.url)
         if (newId) { addBranchEdge(srcId, newId); kept++ }
       } catch { /* skip the ones that fail to download */ }
     }
-    showToast(`Kept ${kept} image${kept === 1 ? '' : 's'}`)
     renderFan(srcId, fanLimitRef.current)
-  }, [setGhosts, importFromUrl, addBranchEdge, showToast, renderFan])
+    return kept
+  }, [setGhosts, importFromUrl, addBranchEdge, renderFan])
+
+  // ✓ keep just this one.
+  const acceptGhost = useCallback(async (srcId, ghostId) => {
+    const ghost = useBoardStore.getState().ghosts.find(g => g.id === ghostId)
+    if (await keepGhosts(srcId, ghost ? [ghost] : []) === 0) showToast('Could not add that image')
+  }, [keepGhosts, showToast])
+
+  // ✕ skip just this one (dismiss without keeping).
+  const rejectGhost = useCallback((srcId, ghostId) => {
+    dismissedRef.current.add(ghostId)
+    setGhosts(srcId, useBoardStore.getState().ghosts.filter(g => g.id !== ghostId))
+  }, [setGhosts])
+
+  // Keep all currently-shown ghosts (mother-node action).
+  const acceptAll = useCallback(async (srcId) => {
+    const current = useBoardStore.getState().ghosts.slice()
+    if (!current.length) return
+    const kept = await keepGhosts(srcId, current)
+    showToast(`Kept ${kept} image${kept === 1 ? '' : 's'}`)
+  }, [keepGhosts, showToast])
+
+  // Keep all currently-shown ghosts except this one (per-ghost action).
+  const acceptAllBut = useCallback(async (srcId, ghostId) => {
+    const current = useBoardStore.getState().ghosts.slice()
+    const keep = current.filter(g => g.id !== ghostId)
+    const skip = current.filter(g => g.id === ghostId)
+    const kept = await keepGhosts(srcId, keep, skip)
+    showToast(`Kept ${kept}, skipped 1`)
+  }, [keepGhosts, showToast])
+
+  // Keep none: dismiss everything shown, reveal the next page (mother-node).
+  const keepNone = useCallback((srcId) => {
+    useBoardStore.getState().ghosts.forEach(g => dismissedRef.current.add(g.id))
+    renderFan(srcId, fanLimitRef.current)
+  }, [renderFan])
 
   const showMore = useCallback((srcId) => {
     const next = fanLimit + FAN_PAGE
@@ -454,9 +468,11 @@ export default function Board({ boardId }) {
             if (!data) return null
             // While a fan is open, dim the real nodes shown as ghosts (avoid dupes).
             const isGhosted = expandedFrom && ghostIdSet.has(sn.id)
+            // Every ready image carries its own ✦ "generate more" icon.
+            const nodeCanDiscover = !!FUNCTION_URL && !!data.imageRef && !expandedFrom && !discovering
             return <ImageNode key={sn.id} node={data} x={sn.x} y={sn.y}
               isSelected={selectedId === sn.id} dimmed={isGhosted}
-              canDiscover={selectedId === sn.id && canDiscover}
+              canDiscover={nodeCanDiscover}
               onMouseDown={handleNodeMouseDown} onExpand={handleExpand} />
           })}
           {spinSrc && spinSrc.x != null && Array.from({ length: FAN_PAGE }).map((_, i) => {
@@ -474,28 +490,38 @@ export default function Board({ boardId }) {
             const gy = fanSrc.y + r * Math.sin(ang)
             return (
               <GhostNode key={g.id} ghost={g} x={gx} y={gy} sx={fanSrc.x} sy={fanSrc.y}
-                onAccept={() => acceptGhost(expandedFrom, g.id)}
-                onReject={() => rejectGhost(expandedFrom, g.id)} />
+                onKeepThis={() => acceptGhost(expandedFrom, g.id)}
+                onKeepRest={() => acceptAllBut(expandedFrom, g.id)}
+                onSkip={() => rejectGhost(expandedFrom, g.id)} />
             )
           })}
+          {/* Mother-node bulk controls: keep all / keep none, just above the source. */}
           {fanSrc && fanSrc.x != null && ghosts.length > 0 && (
-            <g transform={`translate(${fanSrc.x},${fanSrc.y + NODE_R * 3.4 + NODE_R + 22})`}>
-              <g style={{ cursor: 'pointer' }} transform="translate(-58,0)"
+            <g transform={`translate(${fanSrc.x},${fanSrc.y - NODE_R - 14})`}>
+              <g style={{ cursor: 'pointer' }} transform="translate(-46,0)"
                 onMouseDown={e => { e.stopPropagation(); e.preventDefault() }}
                 onClick={e => { e.stopPropagation(); acceptAll(expandedFrom) }}>
-                <rect x={-52} y={-11} width={104} height={22} rx={11} fill="#1f7a4d" stroke="#0c0c1a" />
+                <rect x={-42} y={-11} width={84} height={22} rx={11} fill="#1f7a4d" stroke="#0c0c1a" />
                 <text textAnchor="middle" dominantBaseline="central" fontSize={11} fill="#fff"
                   style={{ userSelect: 'none' }}>✓ keep all {ghosts.length}</text>
               </g>
-              {moreCount > 0 && (
-                <g style={{ cursor: 'pointer' }} transform="translate(58,0)"
-                  onMouseDown={e => { e.stopPropagation(); e.preventDefault() }}
-                  onClick={e => { e.stopPropagation(); showMore(expandedFrom) }}>
-                  <rect x={-52} y={-11} width={104} height={22} rx={11} fill="#16213e" stroke="#2d3a6a" />
-                  <text textAnchor="middle" dominantBaseline="central" fontSize={11} fill="#c5d0ff"
-                    style={{ userSelect: 'none' }}>show {moreCount} more</text>
-                </g>
-              )}
+              <g style={{ cursor: 'pointer' }} transform="translate(46,0)"
+                onMouseDown={e => { e.stopPropagation(); e.preventDefault() }}
+                onClick={e => { e.stopPropagation(); keepNone(expandedFrom) }}>
+                <rect x={-42} y={-11} width={84} height={22} rx={11} fill="#3a1f2a" stroke="#7a2d3a" />
+                <text textAnchor="middle" dominantBaseline="central" fontSize={11} fill="#ffc5d0"
+                  style={{ userSelect: 'none' }}>✕ keep none</text>
+              </g>
+            </g>
+          )}
+          {fanSrc && fanSrc.x != null && ghosts.length > 0 && moreCount > 0 && (
+            <g transform={`translate(${fanSrc.x},${fanSrc.y + NODE_R * 3.4 + NODE_R + 22})`}
+              style={{ cursor: 'pointer' }}
+              onMouseDown={e => { e.stopPropagation(); e.preventDefault() }}
+              onClick={e => { e.stopPropagation(); showMore(expandedFrom) }}>
+              <rect x={-52} y={-11} width={104} height={22} rx={11} fill="#16213e" stroke="#2d3a6a" />
+              <text textAnchor="middle" dominantBaseline="central" fontSize={11} fill="#c5d0ff"
+                style={{ userSelect: 'none' }}>show {moreCount} more</text>
             </g>
           )}
         </g>
@@ -509,6 +535,8 @@ export default function Board({ boardId }) {
       {showCriteria && (
         <div style={criteriaPanel}>
           <div style={criteriaTitle}>✦ tune results</div>
+          <CriteriaRow label="match" value={criteria.similarity} onPick={v => updateCriteria({ similarity: v })}
+            options={[['strict', 'Strict'], ['balanced', 'Balanced'], ['loose', 'Loose']]} />
           <CriteriaRow label="shape" value={criteria.orient} onPick={v => updateCriteria({ orient: v })}
             options={[['any', 'Any'], ['wide', '▭ Wide'], ['tall', '▯ Tall'], ['square', '◻ Square']]} />
           <CriteriaRow label="colour" value={criteria.mood} onPick={v => updateCriteria({ mood: v })}
@@ -677,8 +705,9 @@ async function analyzeMatches(matches) {
   }))
 }
 
-// A translucent suggestion floated around the source, with inline ✓/✕.
-function GhostNode({ ghost, x, y, sx, sy, onAccept, onReject }) {
+// A translucent suggestion floated around the source. Inline actions:
+// ✓ keep just this one · "rest" keep all but this one · ✕ skip this one.
+function GhostNode({ ghost, x, y, sx, sy, onKeepThis, onKeepRest, onSkip }) {
   const SIZE = NODE_R * 2
   const ref = ghost.thumbRef
   const src = ref ? (/^https?:|^blob:|^data:/.test(ref) ? ref : publicUrl(ref)) : null
@@ -695,14 +724,26 @@ function GhostNode({ ghost, x, y, sx, sy, onAccept, onReject }) {
           preserveAspectRatio="xMidYMid slice" clipPath={`url(#${clipId})`} />}
         <rect width={SIZE} height={SIZE} rx={10} ry={10} fill="none"
           stroke="#5b6af0" strokeWidth={1.5} strokeDasharray="5 4" />
-        <g transform={`translate(${NODE_R - 16},${SIZE - 13})`} style={{ cursor: 'pointer' }}
-          onMouseDown={stop} onClick={e => { stop(e); onAccept() }}>
+        {/* keep this one */}
+        <g transform={`translate(${NODE_R - 26},${SIZE - 13})`} style={{ cursor: 'pointer' }}
+          onMouseDown={stop} onClick={e => { stop(e); onKeepThis() }}>
+          <title>Keep just this one</title>
           <circle r={12} fill="#1f7a4d" stroke="#0c0c1a" strokeWidth={1.5} />
           <text textAnchor="middle" dominantBaseline="central" fontSize={13} fill="#fff"
             style={{ userSelect: 'none' }}>✓</text>
         </g>
-        <g transform={`translate(${NODE_R + 16},${SIZE - 13})`} style={{ cursor: 'pointer' }}
-          onMouseDown={stop} onClick={e => { stop(e); onReject() }}>
+        {/* keep all but this one */}
+        <g transform={`translate(${NODE_R},${SIZE - 13})`} style={{ cursor: 'pointer' }}
+          onMouseDown={stop} onClick={e => { stop(e); onKeepRest() }}>
+          <title>Keep all but this one</title>
+          <rect x={-20} y={-11} width={40} height={22} rx={11} fill="#243a6a" stroke="#0c0c1a" strokeWidth={1.5} />
+          <text textAnchor="middle" dominantBaseline="central" fontSize={9.5} fill="#c5d0ff"
+            style={{ userSelect: 'none' }}>rest</text>
+        </g>
+        {/* skip this one */}
+        <g transform={`translate(${NODE_R + 26},${SIZE - 13})`} style={{ cursor: 'pointer' }}
+          onMouseDown={stop} onClick={e => { stop(e); onSkip() }}>
+          <title>Skip this one</title>
           <circle r={12} fill="#7a2d3a" stroke="#0c0c1a" strokeWidth={1.5} />
           <text textAnchor="middle" dominantBaseline="central" fontSize={12} fill="#fff"
             style={{ userSelect: 'none' }}>✕</text>

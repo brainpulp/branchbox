@@ -43,3 +43,16 @@ export function passesCriteria(c, { orient = 'any', mood = 'any' } = {}) {
   if (mood !== 'any' && c.mood && c.mood !== mood) return false
   return true
 }
+
+// Similarity strictness → how deep into the Lens ranking (ordered by visual
+// similarity) we draw candidates from. Stricter = only the closest matches.
+export const SIMILARITY_DEPTH = { strict: 6, balanced: 14, loose: Infinity }
+
+// The candidate pool for an open fan: the top `depth` by similarity, minus
+// anything dismissed, minus anything the shape/colour filters exclude.
+export function selectCandidates(ranked, dismissed, criteria = {}) {
+  const depth = SIMILARITY_DEPTH[criteria.similarity] ?? Infinity
+  return ranked
+    .slice(0, depth)
+    .filter(c => !dismissed.has(c.id) && passesCriteria(c, criteria))
+}
